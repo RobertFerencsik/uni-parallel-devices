@@ -1,10 +1,23 @@
+
+
+from vigenere_cypher import VigenereCypher
+
+
+
 class VigenereCracker:
     def __init__(self, ciphertext):
         self.ciphertext = ciphertext
 
     def crack(self):
-        # Placeholder for the cracking logic
-        pass
+        possible_lengths = self._find_key_length(self.ciphertext)
+        possible_keys = {}
+        for lenght in possible_lengths:
+            key = self._find_key(self.ciphertext, lenght)
+            decrypted_text = VigenereCypher(key).decrypt(self.ciphertext)
+            score = self._score_text(decrypted_text)
+            print(f"Key: {key}, Score: {score}, Decrypted Text: {decrypted_text}")
+            possible_keys[key] = score
+        return possible_keys
     
     @staticmethod
     def _find_key_length(ciphertext):
