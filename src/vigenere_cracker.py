@@ -10,11 +10,11 @@ class VigenereCracker:
 
     def crack(self):
         possible_lengths = self._find_key_length(self.ciphertext)
-        possible_keys = []
+        possible_keys = {}
         for lenght in possible_lengths:
             key = self._find_key(self.ciphertext, lenght)
             decrypted_text = VigenereCypher(key).decrypt(self.ciphertext)
-            possible_keys.append(key)
+            possible_keys[key] = decrypted_text
         return possible_keys
     
     @staticmethod

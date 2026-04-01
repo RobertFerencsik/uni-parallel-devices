@@ -34,3 +34,9 @@ class VigenereCypher:
             plaintext.append(chr(p_val + ord('A')))
 
         return ''.join(plaintext)
+
+    def print_key_plaintext_ciphertext(self, plaintext, ciphertext):
+        key_repeated = (self.key * ((len(plaintext) // len(self.key)) + 1))[:len(plaintext)]
+        print(f"Key:       {key_repeated}")
+        print(f"Plaintext: {plaintext}")
+        print(f"Ciphertext:{ciphertext}")
