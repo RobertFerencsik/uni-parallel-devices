@@ -37,6 +37,6 @@ class VigenereCypher:
 
     def print_key_plaintext_ciphertext(self, plaintext, ciphertext):
         key_repeated = (self.key * ((len(plaintext) // len(self.key)) + 1))[:len(plaintext)]
-        print(f"Key:       {key_repeated}")
-        print(f"Plaintext: {plaintext}")
-        print(f"Ciphertext:{ciphertext}")
+        print(f"Key:       {key_repeated}\n")
+        print(f"Plaintext: {plaintext}\n")
+        print(f"Ciphertext:{ciphertext}\n")

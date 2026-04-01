@@ -5,20 +5,8 @@ from .vigenere_cypher import VigenereCypher
 
 
 class VigenereCracker:
-    def __init__(self, ciphertext):
-        self.ciphertext = ciphertext
-
-    def crack(self):
-        possible_lengths = self._find_key_length(self.ciphertext)
-        possible_keys = {}
-        for lenght in possible_lengths:
-            key = self._find_key(self.ciphertext, lenght)
-            decrypted_text = VigenereCypher(key).decrypt(self.ciphertext)
-            possible_keys[key] = decrypted_text
-        return possible_keys
     
-    @staticmethod
-    def _find_key_length(ciphertext, max_length=20):
+    def find_key_length(self, ciphertext, max_length=20):
         """Find possible key length using Kasiski method"""
         # Find repeating sequences
         counts = {}
@@ -90,31 +78,33 @@ class VigenereCracker:
         # Combine frequency score and word count
         return score - (word_count * 5)  # Lower score is better
 
-    def _find_key(self, ciphertext, key_length):
+    def find_key(self, ciphertext, key_lengths):
         """Find key based on key length"""
-        key = ''
-        
-        for i in range(key_length):
-            # Extract characters at the same key position
-            chars = ciphertext[i::key_length]
-            
-            # Try each possible shift and score
-            best_score = float('inf')
-            best_shift = None
-            
-            for shift in range(26):
-                # Decrypt segment with this shift
-                decrypted = ''.join([chr((ord(c.upper()) - ord('A') - shift) % 26 + ord('A')) for c in chars if c.isalpha()])
+        keys = []
+        for key_length in key_lengths:
+            key = ''
+            for i in range(key_length):
+                # Extract characters at the same key position
+                chars = ciphertext[i::key_length]
                 
-                # Score the result
-                score = self._score_text(decrypted)
+                # Try each possible shift and score
+                best_score = float('inf')
+                best_shift = None
                 
-                if score < best_score:
-                    best_score = score
-                    best_shift = shift
-            
-            # Add best shift to key
-            key += chr(best_shift + ord('A'))
+                for shift in range(26):
+                    # Decrypt segment with this shift
+                    decrypted = ''.join([chr((ord(c.upper()) - ord('A') - shift) % 26 + ord('A')) for c in chars if c.isalpha()])
+                    
+                    # Score the result
+                    score = self._score_text(decrypted)
+                    
+                    if score < best_score:
+                        best_score = score
+                        best_shift = shift
+                
+                # Add best shift to key
+                key += chr(best_shift + ord('A'))
+            keys.append(key)
         
-        return key
+        return keys
 
