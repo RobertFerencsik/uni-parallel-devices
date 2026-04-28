@@ -1,7 +1,43 @@
 from collections import Counter
+import os
+from pathlib import Path
+import sys
+import warnings
 import pyopencl as cl
 import numpy as np
+
+
+def _configure_numba_cuda_paths():
+    """
+    Configure CUDA toolkit paths for Numba in venv/pip-based installs.
+    """
+    venv_root = Path(sys.prefix)
+    bridge_root = venv_root / "cuda-bridge"
+    nvidia_root = venv_root / "Lib" / "site-packages" / "nvidia"
+    cuda_nvcc = nvidia_root / "cuda_nvcc"
+    cuda_runtime = nvidia_root / "cuda_runtime"
+    cuda_nvrtc = nvidia_root / "cuda_nvrtc"
+
+    if "CUDA_PATH" not in os.environ:
+        if bridge_root.exists():
+            os.environ["CUDA_PATH"] = str(bridge_root)
+        elif cuda_nvcc.exists():
+            os.environ["CUDA_PATH"] = str(cuda_nvcc)
+
+    for bin_dir in (bridge_root / "bin", bridge_root / "nvvm" / "bin",
+                    cuda_nvcc / "bin", cuda_nvcc / "nvvm" / "bin",
+                    cuda_runtime / "bin", cuda_nvrtc / "bin"):
+        if bin_dir.exists():
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(str(bin_dir))
+
+
+_configure_numba_cuda_paths()
 from numba import cuda
+from numba.core.errors import NumbaPerformanceWarning
+
+warnings.filterwarnings("ignore", category=NumbaPerformanceWarning)
 
 
 
