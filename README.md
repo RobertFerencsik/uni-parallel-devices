@@ -42,3 +42,52 @@ University of Southampton.(n.d.). Five Ways to Crack a Vigenère Cipher https://
 https://github.com/kn0x0x/vigenere-cracker/blob/main/README.md
 
 https://github.com/Freegle1643/Vigenere-cipher-decoder-and-encoder/blob/master/ciphermanipulate.py
+
+## Paralellism
+
+3 methods are written to find the keys for cracking the vigenere cipher. They paralellism happens in the evaluate shifts. Core idea:
+
+For each key candidate key length:
+
+1. Split cipher text into key_length groups by position
+2. For each group, try Caesar shifts 0..25
+3. Score each shifted group against expected English frequencies
+4. Pick the best shift, convert to key letter
+5. Combine letters into the key
+
+The loop over `key_lengths`and loop over every key `position` is sequential in the following methods. Paralellism happens inside each segment's shift evaulation.
+
+###find_key_sequential (CPU, no true parallelism)
+
+- Loops through each key_length.
+- Loops through each key position.
+- Builds chars = ciphertext[i::key_length].
+- For every shift in 0..25, decrypts chars and calls _score_text.
+- Keeps the shift with lowest score.
+- Appends letter to key.
+
+### find_key_parallel_opencl (GPU via OpenCL)
+
+- Initialize OpenCL platform/device/context/queue.
+- Convert ciphertext to numeric array 0..25 once.
+- Compile two kernels:
+    - count_all_shifts
+    - score_shifts
+- For each key position segment:
+    - Send segment to GPU.
+    - Launch counting kernel over global size segment.size * 26.
+    - Launch scoring kernel over global size 26.
+    - Copy back 26 scores and pick argmin.
+
+### find_key_parallel_cuda (GPU via Numba CUDA)
+
+- Check cuda.is_available().
+- Convert ciphertext to numeric array.
+- Define two CUDA kernels (@cuda.jit):
+    - count_all_shifts_kernel
+    - score_shifts_kernel
+- For each segment:
+    - Copy segment and arrays to device.
+    - Compute block counts.
+    - Launch counting kernel, then scoring kernel.
+    - Copy 26 scores back and pick best shift.
