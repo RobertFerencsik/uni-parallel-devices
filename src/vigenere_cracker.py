@@ -1,10 +1,16 @@
 from collections import Counter
-
-from .vigenere_cypher import VigenereCypher
+import pyopencl as cl
+import numpy as np
+from numba import cuda
 
 
 
 class VigenereCracker:
+    _ENG_FREQ_ARRAY = np.array([
+        8.12, 1.49, 2.71, 4.32, 12.02, 2.30, 2.03, 5.92, 7.31, 0.10, 0.69, 3.98,
+        2.61, 6.95, 7.68, 1.82, 0.11, 6.02, 6.28, 9.10, 2.88, 1.11, 2.09, 0.17,
+        2.11, 0.07
+    ], dtype=np.float32)
     
     def find_key_length(self, ciphertext, max_length=20):
         """Find possible key length using Kasiski method"""
@@ -78,7 +84,7 @@ class VigenereCracker:
         # Combine frequency score and word count
         return score - (word_count * 5)  # Lower score is better
 
-    def find_key(self, ciphertext, key_lengths):
+    def find_key_sequential(self, ciphertext, key_lengths):
         """Find key based on key length"""
         keys = []
         for key_length in key_lengths:
@@ -106,5 +112,175 @@ class VigenereCracker:
                 key += chr(best_shift + ord('A'))
             keys.append(key)
         
+        return keys
+    
+    def find_key_parallel_opencl(self, ciphertext, key_lengths):
+        try:
+            platforms = cl.get_platforms()
+            devices = []
+            for platform in platforms:
+                devices.extend(platform.get_devices(device_type=cl.device_type.GPU))
+            if not devices:
+                raise RuntimeError("No OpenCL GPU device found.")
+            context = cl.Context(devices=[devices[0]])
+            queue = cl.CommandQueue(context)
+        except Exception as exc:
+            raise RuntimeError("OpenCL is not available or failed to initialize.") from exc
+
+        text = np.array(
+            [ord(c.upper()) - ord('A') for c in ciphertext if c.isalpha()],
+            dtype=np.int32
+        )
+        if text.size == 0:
+            return []
+
+        program = cl.Program(
+            context,
+            """
+            __kernel void count_all_shifts(
+                __global const int* segment,
+                const int n,
+                __global unsigned int* counts
+            ) {
+                int gid = get_global_id(0);
+                int shift = gid / n;
+                int idx = gid % n;
+                if (shift >= 26 || idx >= n) {
+                    return;
+                }
+
+                int val = segment[idx] - shift;
+                if (val < 0) {
+                    val += 26;
+                }
+                atom_inc(&counts[shift * 26 + val]);
+            }
+
+            __kernel void score_shifts(
+                __global const unsigned int* counts,
+                __global const float* expected_freq,
+                const int n,
+                __global float* scores
+            ) {
+                int shift = get_global_id(0);
+                if (shift >= 26) {
+                    return;
+                }
+                float score = 0.0f;
+                for (int letter = 0; letter < 26; letter++) {
+                    float freq = ((float)counts[shift * 26 + letter] * 100.0f) / (float)n;
+                    float diff = expected_freq[letter] - freq;
+                    score += diff < 0.0f ? -diff : diff;
+                }
+                scores[shift] = score;
+            }
+            """
+        ).build()
+        count_kernel = cl.Kernel(program, "count_all_shifts")
+        score_kernel = cl.Kernel(program, "score_shifts")
+        expected_freq_buf = cl.Buffer(
+            context,
+            cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+            hostbuf=self._ENG_FREQ_ARRAY
+        )
+
+        keys = []
+
+        for key_length in key_lengths:
+            key = ''
+
+            for position in range(key_length):
+                segment = np.ascontiguousarray(text[position::key_length], dtype=np.int32)
+                if segment.size == 0:
+                    continue
+
+                mf = cl.mem_flags
+                segment_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=segment)
+                counts = np.zeros(26 * 26, dtype=np.uint32)
+                scores = np.zeros(26, dtype=np.float32)
+                counts_buf = cl.Buffer(context, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=counts)
+                scores_buf = cl.Buffer(context, mf.WRITE_ONLY, scores.nbytes)
+
+                count_kernel.set_args(segment_buf, np.int32(segment.size), counts_buf)
+                cl.enqueue_nd_range_kernel(queue, count_kernel, (segment.size * 26,), None)
+
+                score_kernel.set_args(counts_buf, expected_freq_buf, np.int32(segment.size), scores_buf)
+                cl.enqueue_nd_range_kernel(queue, score_kernel, (26,), None)
+
+                cl.enqueue_copy(queue, scores, scores_buf).wait()
+                best_shift = int(np.argmin(scores))
+
+                key += chr(best_shift + ord('A'))
+
+            keys.append(key)
+
+        return keys
+
+    def find_key_parallel_cuda(self, ciphertext, key_lengths):
+        if not cuda.is_available():
+            raise RuntimeError("CUDA is not available. NVIDIA GPU execution is required.")
+
+        text = np.array(
+            [ord(c.upper()) - ord('A') for c in ciphertext if c.isalpha()],
+            dtype=np.int32
+        )
+        if text.size == 0:
+            return []
+
+        @cuda.jit
+        def count_all_shifts_kernel(segment, counts):
+            idx = cuda.grid(1)
+            n = segment.size
+            total = n * 26
+            if idx < total:
+                shift = idx // n
+                pos = idx % n
+                val = (segment[pos] - shift + 26) % 26
+                cuda.atomic.add(counts, (shift, val), 1)
+
+        @cuda.jit
+        def score_shifts_kernel(counts, expected_freq, n, scores):
+            shift = cuda.grid(1)
+            if shift < 26:
+                score = 0.0
+                for letter in range(26):
+                    freq = (counts[shift, letter] * 100.0) / n
+                    diff = expected_freq[letter] - freq
+                    if diff < 0:
+                        diff = -diff
+                    score += diff
+                scores[shift] = score
+
+        keys = []
+        threads = 256
+
+        for key_length in key_lengths:
+            key = ''
+
+            for position in range(key_length):
+                segment = np.ascontiguousarray(text[position::key_length], dtype=np.int32)
+                if segment.size == 0:
+                    continue
+
+                d_segment = cuda.to_device(segment)
+                d_counts = cuda.to_device(np.zeros((26, 26), dtype=np.int32))
+                d_scores = cuda.device_array(26, dtype=np.float32)
+                d_expected = cuda.to_device(self._ENG_FREQ_ARRAY)
+
+                count_blocks = ((segment.size * 26) + threads - 1) // threads
+                score_blocks = (26 + threads - 1) // threads
+
+                count_all_shifts_kernel[count_blocks, threads](d_segment, d_counts)
+                score_shifts_kernel[score_blocks, threads](
+                    d_counts, d_expected, np.float32(segment.size), d_scores
+                )
+
+                scores = d_scores.copy_to_host()
+                best_shift = int(np.argmin(scores))
+
+                key += chr(best_shift + ord('A'))
+
+            keys.append(key)
+
         return keys
 
